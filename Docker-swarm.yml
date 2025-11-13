@@ -1,0 +1,116 @@
+version: '3.8'
+
+secrets:
+  db_user_passwd:
+    file: ./db_user_passwd
+  database_url:
+    file: ./database_url
+  cfgsycapi_secret_key:
+    file: ./cfgsycapi_secret_key
+
+services:
+
+  # Servicio: Base de datos postgreSQL
+
+  postgres-db:
+    image: imarcello51i/postgres:16-alpine
+    container_name: config-api-postgres
+    restart: always
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-Practica3CN}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_user_passwd
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8" # agregado
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    secrets:
+      - db_user_passwd
+    networks:
+      - configapi_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Imagen de splicación config-api ---------------------------------------------------------------
+  config-api:
+    image: imarcello51i/config-api:latest
+    #container_name: config-api-app
+    restart: always
+    deploy:
+      replicas: 3
+      placement:
+        constraints:
+          - node.role == worker
+    ports:
+      - "${API_PORT:-8080}:8080"
+    environment:
+      # Configuración de ASP.NET Core
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
+      ASPNETCORE_URLS: "http://+:8080"
+      ASPNETCORE_HTTPS_PORT: "8080"
+      
+      # Variables de PostgreSQL para el entrypoint
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-Practica3CN}
+      
+      # Cadena de conexión via secret
+      ConnectionStrings__PostgresConnection_FILE: /run/secrets/database_url
+      
+      # Zona horaria
+      TZ: "America/Caracas"
+      
+      # Control de migraciones
+      SKIP_MIGRATIONS: ${SKIP_MIGRATIONS:-false}
+      
+      # Configuración específica del servicio
+      CFGSVCAPI_DEBUG: 'false'
+      CFGSVCAPI_SECRET_KEY_FILE: /run/secrets/cfgsycapi_secret_key
+      CFGSVCAPI_TIME_ZONE: "America/Caracas"
+    
+    secrets:
+      - database_url
+      - cfgsycapi_secret_key
+    networks:
+      - configapi_net
+    depends_on:
+      - postgres-db
+    volumes:
+      - ${CERT_VOLUME:-./certs}:/https:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+# =========================================
+# Volúmenes
+# =========================================
+volumes:
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=nfssrv01,rw
+      device: ":/data/docker-vols/group07/postgres_data"
+
+# Redes
+networks:
+  configapi_net:
+    driver: overlay
+    name: config-api-network
+
+#
+
+
+
