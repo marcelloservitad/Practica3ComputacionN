@@ -1,92 +1,98 @@
-version: '3.8'
+secrets:
+  db_user_passwd:
+    file: ./db_user_passwd
+  database_url:
+    file: ./database_url
+  cfgsycapi_secret_key:
+    file: ./config_api_secret_key
 
 services:
-  # =========================================
-  # Servicio: Base de datos PostgreSQL
-  # =========================================
+
+  # Servicio: Base de datos postgreSQL
+
   postgres-db:
-    image: postgres:16-alpine
+    image: imarcello51i/postgres:16-alpine
     container_name: config-api-postgres
     restart: always
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-Practica3CN}
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-1234}
-      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_user_passwd
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8" 
+    ports:
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    secrets:
+      - db_user_passwd
     networks:
       - configapi_net
-    ports:
-      - "5432:5432"  # Exponer para debugging (opcional)
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      test: ["CMD", "pg_isready"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
 
-  # =========================================
-  # Servicio: Aplicación config-api
-  # =========================================
+  # Imagen de la splicacion config-api ---------------------------------------------------------------
   config-api:
-    image: config-api:latest
-    container_name: config-api-app
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: imarcello51i/config-api:latest
+    #container_name: config-api-app
     restart: always
+    deploy:
+      replicas: 1   # En el video se cambia para asegurar dispomibilidad
+      placement:
+        constraints:
+          - node.role == worker
     ports:
-      - "8080:8080"    # HTTP
-      #- "${HTTPS_PORT:-8081}:7258"   # HTTPS
+      - "${API_PORT:-8080}:8080"
     environment:
       # Configuración de ASP.NET Core
-      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Production}
       ASPNETCORE_URLS: "http://+:8080"
       ASPNETCORE_HTTPS_PORT: "8080"
-      #ASPNETCORE_Kestrel__Certificates__Default__Password: ${CERT_PASSWORD:-}
-      #ASPNETCORE_Kestrel__Certificates__Default__Path: ${CERT_PATH:-}
       
       # Variables de PostgreSQL para el entrypoint
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-1234}
-      POSTGRES_DB: ${POSTGRES_DB:-Practica3CN}
+      POSTGRES_USER: ${POSTGRES_DB}
+      POSTGRES_DB: ${POSTGRES_USER}
       
-      # Cadena de conexión (se sobrescribe en appsettings)
-      ConnectionStrings__PostgresConnection: "Host=postgres-db;Port=5432;Database=${POSTGRES_DB:-Practica3CN};Username=${POSTGRES_USER:-postgres};Password=${POSTGRES_PASSWORD:-1234}"
+      # Cadena de conexión por directorio secret 
+      ConnectionStrings__PostgresConnection_FILE: /run/secrets/database_url
       
       # Zona horaria
       TZ: "America/Caracas"
       
       # Control de migraciones
       SKIP_MIGRATIONS: ${SKIP_MIGRATIONS:-false}
+      
+      # Configuración específica del servicio
+      CONFIG_API_DEBUG: 'false'
+      CONFIG_API_SECRET_KEY_FILE: /run/secrets/config_api_secret_key
+      CONFIG_API_TIME_ZONE: "America/Caracas"
+    
+    secrets:
+      - database_url
+      - config_api_secret_key
     networks:
       - configapi_net
-    depends_on:
-      postgres-db:
-        condition: service_healthy
-    volumes:
-      # Opcional: Para desarrollo, montar certificados SSL
-      - ${CERT_VOLUME:-./certs}:/https:ro
-    healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/status || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
 
-# =========================================
-# Volúmenes
-# =========================================
+# Volúmenes -----------------------------------------------
 volumes:
   postgres_data:
     driver: local
-    name: config-api-postgres-data
+    driver_opts:
+      type: nfs
+      o: addr=nfssrv01,rw
+      device: ":/data/docker-vols/groupYY/postgres_data"
 
-# =========================================
 # Redes
-# =========================================
 networks:
   configapi_net:
-    driver: bridge
+    driver: overlay
     name: config-api-network
+
